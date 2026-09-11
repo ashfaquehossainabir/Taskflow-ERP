@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import PageShell from '../components/PageShell';
 import StatsCards from '../components/StatsCards';
+import DeadlineNotificationBanner from '../components/DeadlineNotificationBanner';
 import TaskCompletionDonut from '../components/TaskCompletionDonut';
 import PendingTasksList from '../components/PendingTasksList';
 import TaskTable from '../components/TaskTable';
@@ -11,7 +12,7 @@ import StatusTasksModal from '../components/StatusTasksModal';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/axios';
 import { canManageTasks } from '../utils/roles';
-import { exactMoney } from '../utils/currency';
+import { exactMoney, exactBDT } from '../utils/currency';
 
 export default function Overview() {
   const { user } = useAuth();
@@ -55,6 +56,8 @@ export default function Overview() {
         isManager ? "Here's how the team's work is tracking today." : "Here's what's on your plate today."
       }
     >
+      <DeadlineNotificationBanner onTaskClick={(task) => setDetailTaskId(task._id)} />
+
       <StatsCards
         stats={stats}
         loading={loading}
@@ -86,7 +89,7 @@ export default function Overview() {
               <>
                 <SnapshotCard label="Outstanding invoices" value={exactMoney(snapshot.outstandingInvoices)} to="/invoices" />
                 <SnapshotCard label="Revenue this month" value={exactMoney(snapshot.revenueThisMonth)} to="/invoices" accent="var(--status-delivered)" />
-                <SnapshotCard label="Expenses this month" value={exactMoney(snapshot.expensesThisMonth)} to="/expenses" accent="var(--status-cancelled)" />
+                <SnapshotCard label="Expenses this month" value={exactBDT(snapshot.expensesThisMonth)} to="/expenses" accent="var(--status-cancelled)" />
               </>
             )}
           </div>
@@ -118,6 +121,24 @@ export default function Overview() {
           .overview-top-grid {
             grid-template-columns: 1fr;
           }
+        }
+        .snapshot-card {
+          display: block;
+          background: var(--bg-panel);
+          border: 1px solid var(--border-hairline-soft);
+          border-radius: var(--radius-lg);
+          padding: 14px 16px;
+          text-decoration: none;
+          transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+        }
+        .snapshot-card:hover {
+          transform: translateY(-2px);
+          border-color: var(--border-hairline);
+          background: var(--bg-panel-raised);
+          box-shadow: var(--shadow-card-hover);
+        }
+        [data-theme='light'] .snapshot-card:hover {
+          background: var(--bg-panel);
         }
       `}</style>
 
@@ -192,17 +213,7 @@ export default function Overview() {
 
 function SnapshotCard({ label, value, to, isCount, accent }) {
   return (
-    <Link
-      to={to}
-      style={{
-        display: 'block',
-        background: 'var(--bg-panel)',
-        border: '1px solid var(--border-hairline-soft)',
-        borderRadius: 'var(--radius-lg)',
-        padding: '14px 16px',
-        textDecoration: 'none',
-      }}
-    >
+    <Link to={to} className="snapshot-card">
       <div
         style={{
           fontSize: 11,

@@ -4,7 +4,8 @@ import PayrollEditModal from '../components/PayrollEditModal';
 import Spinner from '../components/Spinner';
 import SearchInput from '../components/SearchInput';
 import api from '../api/axios';
-import { exactMoney } from '../utils/currency';
+import { downloadFile } from '../utils/download';
+import { exactBDT } from '../utils/currency';
 import { PAYROLL_STATUS_COLORS, pillStyle } from '../erp/badges';
 
 const currentMonth = () => new Date().toISOString().slice(0, 7);
@@ -17,6 +18,20 @@ export default function Payroll() {
   const [editingRecord, setEditingRecord] = useState(null);
   const [banner, setBanner] = useState('');
   const [search, setSearch] = useState('');
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [pdfError, setPdfError] = useState('');
+
+  const handleDownloadPdf = async (record) => {
+    setDownloadingId(record._id);
+    setPdfError('');
+    try {
+      await downloadFile(`/payroll/${record._id}/pdf`, `Payslip-${record.employee?.name || 'employee'}-${record.month}.pdf`);
+    } catch (err) {
+      setPdfError(err.response?.data?.message || 'Failed to download this payslip PDF.');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -33,20 +48,33 @@ export default function Payroll() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month]);
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (regenerate = false) => {
     setGenerating(true);
     setBanner('');
     try {
-      const res = await api.post('/payroll/generate', { month });
-      setBanner(
-        `${res.data.created} payslip(s) generated${res.data.skipped ? `, ${res.data.skipped} already existed or had no salary set` : ''}.`
-      );
+      const res = await api.post('/payroll/generate', { month, regenerate });
+      const parts = [`${res.data.created} payslip(s) generated`];
+      if (regenerate && res.data.removed) {
+        parts.push(`${res.data.removed} existing pending payslip(s) replaced with fresh attendance data`);
+      }
+      if (res.data.skipped) {
+        parts.push(`${res.data.skipped} ${regenerate ? 'already marked paid, left unchanged' : 'already had a payslip this month'}`);
+      }
+      setBanner(`${parts.join(', ')}.`);
       load();
     } catch (err) {
       setBanner(err.response?.data?.message || 'Failed to generate payroll');
     } finally {
       setGenerating(false);
     }
+  };
+
+  const handleRegenerate = () => {
+    const confirmed = window.confirm(
+      `Regenerate payroll for ${month}? Every pending payslip for this month will be deleted and rebuilt from the latest attendance data. Any manual edits or notes on those payslips will be lost. Payslips already marked "paid" are never touched.`
+    );
+    if (!confirmed) return;
+    handleGenerate(true);
   };
 
   const handleSubmit = async (form, id) => {
@@ -80,7 +108,7 @@ export default function Payroll() {
       title="Payroll"
       subtitle="Generate and manage monthly payslips from employee salaries."
       actions={
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             type="month"
             value={month}
@@ -95,7 +123,7 @@ export default function Payroll() {
             }}
           />
           <button
-            onClick={handleGenerate}
+            onClick={() => handleGenerate(false)}
             disabled={generating}
             style={{
               background: 'var(--accent-cyan)',
@@ -109,6 +137,23 @@ export default function Payroll() {
             }}
           >
             {generating ? 'Generating…' : 'Generate payroll'}
+          </button>
+          <button
+            onClick={handleRegenerate}
+            disabled={generating}
+            title="Delete pending payslips for this month and rebuild them from the latest attendance data. Paid payslips are never touched."
+            style={{
+              background: 'transparent',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border-hairline)',
+              borderRadius: 8,
+              padding: '10px 18px',
+              fontSize: 13.5,
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            {generating ? 'Working…' : 'Regenerate payroll'}
           </button>
         </div>
       }
@@ -129,30 +174,50 @@ export default function Payroll() {
         </div>
       )}
 
+      {pdfError && (
+        <div
+          style={{
+            background: 'rgba(239, 100, 97, 0.1)',
+            border: '1px solid rgba(239, 100, 97, 0.35)',
+            color: 'var(--text-error)',
+            padding: '10px 12px',
+            borderRadius: 8,
+            fontSize: 13,
+            marginBottom: 16,
+          }}
+        >
+          {pdfError}
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14, marginBottom: 22 }}>
         <div style={cardStyle}>
           <div style={cardLabelStyle}>Total payroll</div>
           <div className="mono" style={{ fontSize: 22, fontWeight: 700 }}>
-            {exactMoney(totals.netTotal)}
+            {exactBDT(totals.netTotal)}
           </div>
         </div>
         <div style={cardStyle}>
           <div style={cardLabelStyle}>Paid out</div>
           <div className="mono" style={{ fontSize: 22, fontWeight: 700, color: 'var(--status-delivered)' }}>
-            {exactMoney(totals.paidTotal)}
+            {exactBDT(totals.paidTotal)}
           </div>
         </div>
         <div style={cardStyle}>
           <div style={cardLabelStyle}>Pending</div>
           <div className="mono" style={{ fontSize: 22, fontWeight: 700, color: 'var(--status-hold)' }}>
-            {exactMoney(totals.pendingTotal)}
+            {exactBDT(totals.pendingTotal)}
           </div>
         </div>
       </div>
 
       <p style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 16 }}>
-        Generating pulls the monthly salary set on each active employee's profile (Team &amp; Access). Employees without a
-        salary set are skipped.
+        Generating pulls the monthly salary set on each active employee's profile (Team &amp; Access) along with their
+        attendance for the month. Present days (including late arrivals) are counted for reference; absent days are
+        deducted at the employee's daily rate (monthly salary ÷ days in the month); half-days deduct half of that daily
+        rate; every 4 late days deducts an extra 1% of base salary; leave and holidays are never deducted. If attendance
+        gets corrected after payroll was already generated, use "Regenerate payroll" to rebuild pending payslips for the
+        month from the latest attendance data — payslips already marked paid are always left untouched.
       </p>
 
       <div style={{ marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -177,7 +242,7 @@ export default function Payroll() {
           <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse' }}>
             <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: 'var(--bg-panel)' }}>
               <tr>
-                {['Employee', 'Base', 'Allowances + Bonus', 'Deductions', 'Net pay', 'Status', ''].map((h) => (
+                {['Employee', 'Present', 'Base', 'Allowances + Bonus', 'Deductions', 'Net pay', 'Status', ''].map((h) => (
                   <th key={h} style={thStyle}>
                     {h}
                   </th>
@@ -187,7 +252,7 @@ export default function Payroll() {
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={7} style={{ padding: '40px 16px' }}>
+                  <td colSpan={8} style={{ padding: '40px 16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'center' }}>
                       <Spinner label="Loading payroll…" />
                     </div>
@@ -196,14 +261,14 @@ export default function Payroll() {
               )}
               {!loading && records.length === 0 && (
                 <tr>
-                  <td colSpan={7} style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  <td colSpan={8} style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--text-muted)' }}>
                     No payslips for this month yet — click "Generate payroll" to create them.
                   </td>
                 </tr>
               )}
               {!loading && records.length > 0 && filteredRecords.length === 0 && (
                 <tr>
-                  <td colSpan={7} style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  <td colSpan={8} style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--text-muted)' }}>
                     No payslips match "{search}".
                   </td>
                 </tr>
@@ -215,22 +280,54 @@ export default function Payroll() {
                     <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{r.employee?.designation || r.employee?.department || ''}</div>
                   </td>
                   <td style={tdStyle} className="mono">
-                    {exactMoney(r.baseSalary)}
+                    {r.attendance?.totalDaysInMonth > 0
+                      ? `${r.attendance.presentDays || 0}/${r.attendance.totalDaysInMonth}`
+                      : '—'}
+                    {r.attendance?.halfDays > 0 && (
+                      <div style={{ fontSize: 10.5, color: 'var(--text-muted)', fontFamily: 'var(--font-sans, inherit)', marginTop: 2 }}>
+                        +{r.attendance.halfDays}d half-day
+                      </div>
+                    )}
                   </td>
                   <td style={tdStyle} className="mono">
-                    {exactMoney(r.allowances + r.bonus)}
+                    {exactBDT(r.baseSalary)}
                   </td>
                   <td style={tdStyle} className="mono">
-                    {exactMoney(r.deductions)}
+                    {exactBDT(r.allowances + r.bonus)}
+                  </td>
+                  <td style={tdStyle} className="mono">
+                    {exactBDT(r.deductions)}
+                    {(r.attendance?.absentDays > 0 ||
+                      r.attendance?.lateDays > 0 ||
+                      r.attendance?.halfDays > 0 ||
+                      r.attendance?.unsetDays > 0) && (
+                      <div style={{ fontSize: 10.5, color: 'var(--text-muted)', fontFamily: 'var(--font-sans, inherit)', marginTop: 2 }}>
+                        {[
+                          r.attendance.absentDays > 0 && `${r.attendance.absentDays}d absent`,
+                          r.attendance.halfDays > 0 && `${r.attendance.halfDays}d half-day`,
+                          r.attendance.lateDays > 0 && `${r.attendance.lateDays}d late`,
+                          r.attendance.unsetDays > 0 && `${r.attendance.unsetDays}d N/A`,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </div>
+                    )}
                   </td>
                   <td className="mono" style={{ ...tdStyle, fontWeight: 700 }}>
-                    {exactMoney(r.netPay)}
+                    {exactBDT(r.netPay)}
                   </td>
                   <td style={tdStyle}>
                     <span style={pillStyle(PAYROLL_STATUS_COLORS[r.status])}>{r.status}</span>
                   </td>
                   <td style={tdStyle}>
                     <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        onClick={() => handleDownloadPdf(r)}
+                        disabled={downloadingId === r._id}
+                        style={iconBtnStyle}
+                      >
+                        {downloadingId === r._id ? 'Preparing…' : 'PDF'}
+                      </button>
                       <button onClick={() => setEditingRecord(r)} style={iconBtnStyle}>
                         Edit
                       </button>
